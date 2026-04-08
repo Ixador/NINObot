@@ -1,4 +1,3 @@
-import os
 import requests
 import time
 import json
@@ -16,7 +15,6 @@ ADMIN_IDS = [
     6498758813,
     7092403802,
 ]
-
 
 # ========== БАЗА ДАННЫХ ==========
 def init_db():
@@ -70,7 +68,6 @@ def init_db():
 
 
 init_db()
-
 
 # ========== ФУНКЦИИ БАЗЫ ДАННЫХ ==========
 def add_user(user_id, fullname, age, username):
@@ -209,7 +206,7 @@ def send_message(chat_id, text, keyboard=None):
         payload["reply_markup"] = json.dumps(keyboard)
 
     try:
-        response = requests.post(url, data=payload, proxies=proxies)
+        response = requests.post(url, data=payload)
         return response.json()
     except Exception as e:
         print(f"Ошибка отправки: {e}")
@@ -224,7 +221,7 @@ def send_message_simple(chat_id, text):
         "parse_mode": "HTML"
     }
     try:
-        requests.post(url, data=payload, proxies=proxies)
+        requests.post(url, data=payload)
     except Exception as e:
         print(f"Ошибка отправки: {e}")
 
@@ -239,7 +236,7 @@ def send_photo_by_url(chat_id, photo_url, caption=None):
     if caption:
         payload["caption"] = caption
     try:
-        response = requests.post(url, data=payload, proxies=proxies)
+        response = requests.post(url, data=payload)
         if response.status_code == 200:
             return True
         else:
@@ -256,7 +253,7 @@ def answer_callback(callback_id, text=None):
     if text:
         payload["text"] = text
     try:
-        requests.post(url, data=payload, proxies=proxies)
+        requests.post(url, data=payload)
     except Exception as e:
         print(f"Ошибка callback: {e}")
 
@@ -268,10 +265,7 @@ def get_updates(offset=None):
         params["offset"] = offset
 
     try:
-        # Создаём сессию
-        session = requests.Session()
-        session.trust_env = False  # Не использовать системные прокси
-        response = session.get(url, params=params, proxies=proxies, timeout=30)
+        response = requests.get(url, params=params)
         result = response.json()
         if result.get("ok"):
             return result.get("result", [])
@@ -285,11 +279,11 @@ def get_updates(offset=None):
 
 def notify_users_about_new_meet(meet_name, meet_date, meet_time, description):
     users = get_all_users()
-
+    
     if not users:
         print("Нет пользователей для уведомления")
         return
-
+    
     notification_text = f"""
 🎉 <b>НОВАЯ СХОДКА В NINO!</b>
 
@@ -304,10 +298,10 @@ def notify_users_about_new_meet(meet_name, meet_date, meet_time, description):
 
 Ждём тебя! 🔥
 """
-
+    
     success_count = 0
     fail_count = 0
-
+    
     for user in users:
         user_id = user[0]
         try:
@@ -316,25 +310,25 @@ def notify_users_about_new_meet(meet_name, meet_date, meet_time, description):
         except Exception as e:
             fail_count += 1
             print(f"Не удалось уведомить пользователя {user_id}: {e}")
-
+        
         time.sleep(0.05)
-
+    
     print(f"Уведомления о новой сходке отправлены: ✅ {success_count}, ❌ {fail_count}")
 
 
 # ========== КЛАВИАТУРЫ ==========
 def get_main_keyboard(user_id=None):
     buttons = [[{"text": "🎫 Записаться на сходку", "callback_data": "register_for_meet"}]]
-
+    
     if user_id:
         active_meet = get_active_meet()
         if active_meet:
             reg = get_registration(user_id, active_meet[0])
             if reg and reg[4] == 'waiting':
                 buttons.append([{"text": "🎟️ Мой код на сходку", "callback_data": "show_my_code"}])
-
+    
     buttons.append([{"text": "ℹ️ О нас", "callback_data": "about"}, {"text": "❓ Помощь", "callback_data": "help"}])
-
+    
     return {"inline_keyboard": buttons}
 
 
@@ -507,7 +501,7 @@ def process_message(message):
         return
 
     text = message["text"].strip()
-
+    
     print(f"📩 Получено сообщение от {user_name}: {text}")
 
     if text == "/start":
@@ -541,8 +535,7 @@ def process_message(message):
         if action == 'waiting_name':
             admin_states[user_id]['meet_data'] = {'name': text}
             admin_states[user_id]['action'] = 'waiting_date'
-            send_message_simple(chat_id,
-                                "📅 Введите <b>дату</b> сходки\n\nПример: <code>25 декабря</code> или <code>25.12</code>")
+            send_message_simple(chat_id, "📅 Введите <b>дату</b> сходки\n\nПример: <code>25 декабря</code> или <code>25.12</code>")
 
         elif action == 'waiting_date':
             admin_states[user_id]['meet_data']['date'] = text
@@ -569,9 +562,9 @@ def process_message(message):
 🎉 Регистрация открыта!
 """
             send_message_simple(chat_id, meet_info)
-
+            
             notify_users_about_new_meet(meet_data['name'], meet_data['date'], meet_data['time'], text)
-
+            
             send_message(chat_id, "🔧 <b>Админ-панель</b>", get_admin_keyboard())
             del admin_states[user_id]
         return
@@ -599,23 +592,22 @@ def process_message(message):
 ⏰ Отмечен в: {datetime.now().strftime('%H:%M:%S')}
 """)
             else:
-                send_message_simple(chat_id,
-                                    f"❌ <b>Неверный код!</b>\n\nКод <code>{text}</code> не найден или уже использован.")
+                send_message_simple(chat_id, f"❌ <b>Неверный код!</b>\n\nКод <code>{text}</code> не найден или уже использован.")
         return
 
     # ========== РАССЫЛКА ==========
-
+    
     # Шаг 1: Пользователь выбрал "Только текст" - ждём текст
     if is_admin(user_id) and admin_states.get(user_id, {}).get('mailing_waiting_text'):
         if text == "/cancel":
             del admin_states[user_id]
             send_message(chat_id, "❌ Создание рассылки отменено.\n\n🔧 <b>Админ-панель</b>", get_admin_keyboard())
             return
-
+        
         admin_states[user_id]['mailing_text'] = text
         del admin_states[user_id]['mailing_waiting_text']
         admin_states[user_id]['mailing_step'] = 'confirm_text'
-
+        
         confirm_text = f"""
 📢 <b>ПРЕДПРОСМОТР РАССЫЛКИ</b>
 
@@ -634,36 +626,34 @@ def process_message(message):
         }
         send_message(chat_id, confirm_text, keyboard)
         return
-
+    
     # Шаг 2: Пользователь выбрал "Текст + ссылка на фото" - ждём текст
     if is_admin(user_id) and admin_states.get(user_id, {}).get('mailing_waiting_photo_text'):
         if text == "/cancel":
             del admin_states[user_id]
             send_message(chat_id, "❌ Создание рассылки отменено.\n\n🔧 <b>Админ-панель</b>", get_admin_keyboard())
             return
-
+        
         admin_states[user_id]['mailing_text'] = text
         del admin_states[user_id]['mailing_waiting_photo_text']
         admin_states[user_id]['mailing_step'] = 'waiting_photo_url'
-        send_message_simple(chat_id,
-                            "🖼️ Теперь отправьте <b>прямую ссылку на фото</b>\n\nПример: <code>https://example.com/photo.jpg</code>\n\nКак получить ссылку:\n1. Отправьте фото боту @lhl_images_bot\n2. Скопируйте полученную ссылку\n3. Вставьте её сюда\n\nИли отправьте /cancel для отмены")
+        send_message_simple(chat_id, "🖼️ Теперь отправьте <b>прямую ссылку на фото</b>\n\nПример: <code>https://example.com/photo.jpg</code>\n\nКак получить ссылку:\n1. Отправьте фото боту @lhl_images_bot\n2. Скопируйте полученную ссылку\n3. Вставьте её сюда\n\nИли отправьте /cancel для отмены")
         return
-
+    
     # Шаг 3: Ждём ссылку на фото
     if is_admin(user_id) and admin_states.get(user_id, {}).get('mailing_step') == 'waiting_photo_url':
         if text == "/cancel":
             del admin_states[user_id]
             send_message(chat_id, "❌ Создание рассылки отменено.\n\n🔧 <b>Админ-панель</b>", get_admin_keyboard())
             return
-
+        
         photo_url = text
         mailing_text = admin_states[user_id].get('mailing_text', '')
-
+        
         if not (photo_url.startswith('http://') or photo_url.startswith('https://')):
-            send_message_simple(chat_id,
-                                "❌ Это не похоже на ссылку! Отправьте ссылку, начинающуюся с http:// или https://\n\nИли отправьте /cancel для отмены")
+            send_message_simple(chat_id, "❌ Это не похоже на ссылку! Отправьте ссылку, начинающуюся с http:// или https://\n\nИли отправьте /cancel для отмены")
             return
-
+        
         confirm_text = f"""
 📢 <b>ПРЕДПРОСМОТР РАССЫЛКИ (с фото)</b>
 
@@ -691,8 +681,7 @@ def process_message(message):
     if user_states.get(user_id, {}).get('waiting_name'):
         parts = text.split()
         if len(parts) < 2:
-            send_message_simple(chat_id,
-                                "❌ Введите <b>фамилию и имя</b> через пробел\n\nПример: <code>Иванов Иван</code>")
+            send_message_simple(chat_id, "❌ Введите <b>фамилию и имя</b> через пробел\n\nПример: <code>Иванов Иван</code>")
             return
 
         user_states[user_id]['fullname'] = text
@@ -840,8 +829,7 @@ NINO — это не просто сообщество. Это твоя личн
     elif data == "my_registration":
         user = get_user(user_id)
         if not user:
-            send_message_simple(chat_id,
-                                "❌ Вы ещё не зарегистрированы!\n\nНажмите «Записаться на сходку» для регистрации.")
+            send_message_simple(chat_id, "❌ Вы ещё не зарегистрированы!\n\nНажмите «Записаться на сходку» для регистрации.")
         else:
             fullname, age, username, reg_time = user[1], user[2], user[3], user[4]
             text = f"""
@@ -859,12 +847,12 @@ NINO — это не просто сообщество. Это твоя личн
         if not active_meet:
             send_message_simple(chat_id, "❌ Сейчас нет активных сходок!")
             return
-
+        
         reg = get_registration(user_id, active_meet[0])
         if not reg:
             send_message_simple(chat_id, "❌ Вы не записаны на текущую сходку!\n\nНажмите «Записаться на сходку».")
             return
-
+        
         if reg[4] == 'present':
             send_message_simple(chat_id, f"""
 ✅ <b>Ты уже отмечен на сходке!</b>
@@ -879,7 +867,7 @@ NINO — это не просто сообщество. Это твоя личн
             meet_date = active_meet[2]
             meet_time = active_meet[3]
             code = reg[3]
-
+            
             text = f"""
 🎫 <b>ТВОЙ КОД НА СХОДКУ</b>
 
@@ -982,7 +970,7 @@ NINO — это не просто сообщество. Это твоя личн
 Ждём тебя! 🔥
 """
         send_message_simple(chat_id, reg_text)
-
+        
         if is_admin(user_id):
             send_message(chat_id, "🔧 <b>Админ-панель</b>", get_admin_keyboard())
         else:
@@ -1114,8 +1102,7 @@ NINO — это не просто сообщество. Это твоя личн
         users_count = len(get_all_users())
 
         if users_count == 0:
-            send_message_simple(chat_id,
-                                "❌ Нет зарегистрированных пользователей для рассылки!\n\nСначала дождитесь регистрации пользователей.")
+            send_message_simple(chat_id, "❌ Нет зарегистрированных пользователей для рассылки!\n\nСначала дождитесь регистрации пользователей.")
             return
 
         text = f"""
@@ -1131,15 +1118,13 @@ NINO — это не просто сообщество. Это твоя личн
         if not is_admin(user_id):
             return
         admin_states[user_id] = {'mailing_waiting_text': True}
-        send_message_simple(chat_id,
-                            "📝 Введите <b>текст</b> для рассылки:\n\nМожно использовать HTML теги\n\nИли отправьте /cancel для отмены")
+        send_message_simple(chat_id, "📝 Введите <b>текст</b> для рассылки:\n\nМожно использовать HTML теги\n\nИли отправьте /cancel для отмены")
 
     elif data == "mailing_photo":
         if not is_admin(user_id):
             return
         admin_states[user_id] = {'mailing_waiting_photo_text': True}
-        send_message_simple(chat_id,
-                            "📝 Введите <b>текст</b> для рассылки (будет подписью к фото):\n\nИли отправьте /cancel для отмены")
+        send_message_simple(chat_id, "📝 Введите <b>текст</b> для рассылки (будет подписью к фото):\n\nИли отправьте /cancel для отмены")
 
     elif data == "mailing_restart":
         if not is_admin(user_id):
@@ -1219,7 +1204,7 @@ NINO — это не просто сообщество. Это твоя личн
 # ========== ОСНОВНОЙ ЦИКЛ ==========
 def main():
     try:
-        requests.get(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook", proxies=proxies)
+        requests.get(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook")
         print("✅ Вебхук удалён")
     except:
         pass
@@ -1257,7 +1242,7 @@ def main():
 if __name__ == "__main__":
     try:
         test_url = f"https://api.telegram.org/bot{BOT_TOKEN}/getMe"
-        response = requests.get(test_url, proxies=proxies)
+        response = requests.get(test_url)
         if response.status_code == 200:
             bot_info = response.json()
             if bot_info.get("ok"):
