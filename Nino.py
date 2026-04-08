@@ -7,24 +7,6 @@ from datetime import datetime
 import random
 import string
 
-# ========== НАСТРОЙКИ ПРОКСИ (ЕСЛИ НУЖЕН) ==========
-# РАСКОММЕНТИРУЙТЕ ЭТОТ БЛОК, ЕСЛИ ВАМ НУЖЕН ПРОКСИ
-# И ЗАМЕНИТЕ НА ВАШИ ДАННЫЕ
-USE_PROXY = True  # Поставьте True, если нужен прокси
-
-if USE_PROXY:
-    proxies = {
-        'http': 'http://ваш_прокси:порт',  # Пример: 'http://proxy.example.com:8080'
-        'https': 'http://ваш_прокси:порт'  # Пример: 'http://proxy.example.com:8080'
-    }
-else:
-    proxies = None
-    # Отключаем системные прокси
-    os.environ.pop('http_proxy', None)
-    os.environ.pop('https_proxy', None)
-    os.environ.pop('HTTP_PROXY', None)
-    os.environ.pop('HTTPS_PROXY', None)
-
 # ========== НАСТРОЙКИ ==========
 BOT_TOKEN = "8721247040:AAHjEQdoPUQwyUjfSl7-zOZRE0k4OUoUHbo"
 
