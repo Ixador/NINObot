@@ -6,16 +6,17 @@ from datetime import datetime
 import random
 import string
 
+# ========== НАСТРОЙКИ ==========
 BOT_TOKEN = "8721247040:AAHjEQdoPUQwyUjfSl7-zOZRE0k4OUoUHbo"
 
-# админки
+# СПИСОК АДМИНОВ
 ADMIN_IDS = [
     7838556865,
     6498758813,
     7092403802,
 ]
 
-# данный библиотека db
+# ========== БАЗА ДАННЫХ ==========
 def init_db():
     conn = sqlite3.connect('nino_bot.db')
     cursor = conn.cursor()
@@ -264,7 +265,8 @@ def get_updates(offset=None):
         params["offset"] = offset
 
     try:
-        response = requests.get(url, params=params)
+        session = requests.Session()
+        response = session.get(url, params=params, timeout=30)
         result = response.json()
         if result.get("ok"):
             return result.get("result", [])
@@ -317,14 +319,22 @@ def notify_users_about_new_meet(meet_name, meet_date, meet_time, description):
 
 # ========== КЛАВИАТУРЫ ==========
 def get_main_keyboard(user_id=None):
+    """Главное меню с кнопкой проверки кода для зарегистрированных пользователей"""
     buttons = [[{"text": "🎫 Записаться на сходку", "callback_data": "register_for_meet"}]]
     
+    # Проверяем, зарегистрирован ли пользователь
     if user_id:
-        active_meet = get_active_meet()
-        if active_meet:
-            reg = get_registration(user_id, active_meet[0])
-            if reg and reg[4] == 'waiting':
-                buttons.append([{"text": "🎟️ Мой код на сходку", "callback_data": "show_my_code"}])
+        user = get_user(user_id)
+        if user:
+            # Пользователь зарегистрирован, добавляем кнопку проверки кода
+            buttons.append([{"text": "🔍 Проверить свой код", "callback_data": "check_my_code"}])
+            
+            # Также проверяем, записан ли он на активную сходку
+            active_meet = get_active_meet()
+            if active_meet:
+                reg = get_registration(user_id, active_meet[0])
+                if reg and reg[4] == 'waiting':
+                    buttons.append([{"text": "🎟️ Мой код на сходку", "callback_data": "show_my_code"}])
     
     buttons.append([{"text": "ℹ️ О нас", "callback_data": "about"}, {"text": "❓ Помощь", "callback_data": "help"}])
     
@@ -676,8 +686,15 @@ def process_message(message):
         send_message(chat_id, confirm_text, keyboard)
         return
 
-    # РЕГИСТРАЦИЯ ПОЛЬЗОВАТЕЛЯ
+    # РЕГИСТРАЦИЯ ПОЛЬЗОВАТЕЛЯ (с проверкой на повторную регистрацию)
     if user_states.get(user_id, {}).get('waiting_name'):
+        # Проверяем, не зарегистрирован ли уже пользователь
+        existing_user = get_user(user_id)
+        if existing_user:
+            send_message_simple(chat_id, "❌ <b>Вы уже зарегистрированы в NINO!</b>\n\nВы уже прошли регистрацию. Теперь вы можете записываться на сходки.\n\nЕсли хотите изменить данные, обратитесь к администратору.")
+            del user_states[user_id]
+            return
+        
         parts = text.split()
         if len(parts) < 2:
             send_message_simple(chat_id, "❌ Введите <b>фамилию и имя</b> через пробел\n\nПример: <code>Иванов Иван</code>")
@@ -690,6 +707,13 @@ def process_message(message):
         return
 
     if user_states.get(user_id, {}).get('waiting_age'):
+        # Ещё раз проверяем регистрацию (на всякий случай)
+        existing_user = get_user(user_id)
+        if existing_user:
+            send_message_simple(chat_id, "❌ <b>Вы уже зарегистрированы в NINO!</b>\n\nПовторная регистрация невозможна.")
+            del user_states[user_id]
+            return
+        
         try:
             age = int(text)
             if age < 14:
@@ -841,6 +865,59 @@ NINO — это не просто сообщество. Это твоя личн
 """
             send_message_simple(chat_id, text)
 
+    # === НОВАЯ КНОПКА: ПРОВЕРИТЬ СВОЙ КОД ===
+    elif data == "check_my_code":
+        user = get_user(user_id)
+        if not user:
+            send_message_simple(chat_id, "❌ Вы ещё не зарегистрированы!\n\nСначала зарегистрируйтесь через кнопку «Записаться на сходку».")
+            return
+        
+        active_meet = get_active_meet()
+        if not active_meet:
+            send_message_simple(chat_id, "❌ Сейчас нет активных сходок!")
+            return
+        
+        reg = get_registration(user_id, active_meet[0])
+        if not reg:
+            send_message_simple(chat_id, f"""
+❌ <b>Вы не записаны на активную сходку!</b>
+
+📌 Активная сходка: <b>{active_meet[1]}</b>
+📅 {active_meet[2]} | ⏰ {active_meet[3]}
+
+Хотите пойти? Нажмите «Записаться на сходку» в главном меню!
+""")
+            return
+        
+        if reg[4] == 'present':
+            send_message_simple(chat_id, f"""
+✅ <b>Вы уже отмечены на сходке!</b>
+
+📌 <b>{active_meet[1]}</b>
+📅 {active_meet[2]} | ⏰ {active_meet[3]}
+
+Спасибо, что пришли! 🎉
+""")
+        else:
+            code = reg[3]
+            send_message_simple(chat_id, f"""
+🎫 <b>ВАШ КОД НА СХОДКУ</b>
+
+━━━━━━━━━━━━━━━━━━━━━
+📌 <b>{active_meet[1]}</b>
+📅 {active_meet[2]} | ⏰ {active_meet[3]}
+━━━━━━━━━━━━━━━━━━━━━
+
+<b>Код:</b> <code>{code}</code>
+
+⚠️ <b>ВАЖНО!</b>
+• Покажи этот код на входе
+• Код одноразовый
+• Не передавай его никому
+
+Ждём тебя! 🔥
+""")
+
     elif data == "show_my_code":
         active_meet = get_active_meet()
         if not active_meet:
@@ -909,7 +986,7 @@ NINO — это не просто сообщество. Это твоя личн
             if existing_reg:
                 if existing_reg[4] == 'waiting':
                     send_message_simple(chat_id, f"""
-⚠️ <b>Вы уже записаны!</b>
+⚠️ <b>Вы уже записаны на эту сходку!</b>
 
 📌 {meet_name}
 🎫 Ваш код: <code>{existing_reg[3]}</code>
@@ -1205,6 +1282,12 @@ def main():
     try:
         requests.get(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook")
         print("✅ Вебхук удалён")
+    except:
+        pass
+    
+    try:
+        requests.get(f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates?offset=-1")
+        print("✅ Сброшен offset")
     except:
         pass
 
