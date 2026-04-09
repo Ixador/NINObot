@@ -6,17 +6,16 @@ from datetime import datetime
 import random
 import string
 
-# ========== НАСТРОЙКИ ==========
 BOT_TOKEN = "8721247040:AAHjEQdoPUQwyUjfSl7-zOZRE0k4OUoUHbo"
 
-# СПИСОК АДМИНОВ
+# админки
 ADMIN_IDS = [
     7838556865,
     6498758813,
     7092403802,
 ]
 
-# ========== БАЗА ДАННЫХ ==========
+# данный библиотека db
 def init_db():
     conn = sqlite3.connect('nino_bot.db')
     cursor = conn.cursor()
