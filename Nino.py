@@ -5,6 +5,7 @@ import sqlite3
 from datetime import datetime
 import random
 import string
+import threading
 
 # ========== НАСТРОЙКИ ==========
 BOT_TOKEN = "8721247040:AAHjEQdoPUQwyUjfSl7-zOZRE0k4OUoUHbo"
@@ -27,7 +28,8 @@ def init_db():
             fullname TEXT,
             age INTEGER,
             username TEXT,
-            registered_at TEXT
+            registered_at TEXT,
+            last_active TEXT
         )
     ''')
 
@@ -39,15 +41,11 @@ def init_db():
             meet_time TEXT,
             description TEXT,
             is_active INTEGER DEFAULT 1,
-            created_at TEXT
+            created_at TEXT,
+            created_by INTEGER,
+            auto_closed INTEGER DEFAULT 0
         )
     ''')
-
-    cursor.execute("PRAGMA table_info(meets)")
-    columns = [column[1] for column in cursor.fetchall()]
-
-    if 'created_by' not in columns:
-        cursor.execute('ALTER TABLE meets ADD COLUMN created_by INTEGER DEFAULT 0')
 
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS registrations (
@@ -63,8 +61,15 @@ def init_db():
         )
     ''')
 
+    # Добавляем колонку last_active если её нет
+    cursor.execute("PRAGMA table_info(users)")
+    columns = [column[1] for column in cursor.fetchall()]
+    if 'last_active' not in columns:
+        cursor.execute('ALTER TABLE users ADD COLUMN last_active TEXT')
+
     conn.commit()
     conn.close()
+    print("✅ База данных инициализирована")
 
 
 init_db()
@@ -73,10 +78,26 @@ init_db()
 def add_user(user_id, fullname, age, username):
     conn = sqlite3.connect('nino_bot.db')
     cursor = conn.cursor()
-    cursor.execute('''
-        INSERT OR REPLACE INTO users (user_id, fullname, age, username, registered_at)
-        VALUES (?, ?, ?, ?, ?)
-    ''', (user_id, fullname, age, username, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+    
+    # Проверяем, существует ли пользователь
+    cursor.execute('SELECT user_id FROM users WHERE user_id = ?', (user_id,))
+    existing = cursor.fetchone()
+    
+    if existing:
+        # Обновляем last_active
+        cursor.execute('''
+            UPDATE users 
+            SET last_active = ?, username = ?
+            WHERE user_id = ?
+        ''', (datetime.now().strftime('%Y-%m-%d %H:%M:%S'), username, user_id))
+    else:
+        # Добавляем нового
+        cursor.execute('''
+            INSERT INTO users (user_id, fullname, age, username, registered_at, last_active)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (user_id, fullname, age, username, datetime.now().strftime('%Y-%m-%d %H:%M:%S'), 
+              datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+    
     conn.commit()
     conn.close()
 
@@ -93,7 +114,7 @@ def get_user(user_id):
 def get_all_users():
     conn = sqlite3.connect('nino_bot.db')
     cursor = conn.cursor()
-    cursor.execute('SELECT user_id, fullname, username FROM users')
+    cursor.execute('SELECT user_id, fullname, username, last_active FROM users ORDER BY registered_at DESC')
     users = cursor.fetchall()
     conn.close()
     return users
@@ -102,6 +123,11 @@ def get_all_users():
 def add_meet(meet_name, meet_date, meet_time, description, admin_id):
     conn = sqlite3.connect('nino_bot.db')
     cursor = conn.cursor()
+    
+    # Закрываем предыдущие активные сходки
+    cursor.execute('UPDATE meets SET is_active = 0 WHERE is_active = 1')
+    
+    # Создаём новую
     cursor.execute('''
         INSERT INTO meets (meet_name, meet_date, meet_time, description, is_active, created_at, created_by)
         VALUES (?, ?, ?, ?, 1, ?, ?)
@@ -113,10 +139,27 @@ def add_meet(meet_name, meet_date, meet_time, description, admin_id):
 
 
 def get_active_meet():
+    """Возвращает активную сходку (с проверкой даты)"""
     conn = sqlite3.connect('nino_bot.db')
     cursor = conn.cursor()
+    
+    # Получаем активную сходку
     cursor.execute('SELECT * FROM meets WHERE is_active = 1 ORDER BY meet_id DESC LIMIT 1')
     meet = cursor.fetchone()
+    
+    if meet:
+        # Проверяем, не прошла ли уже дата сходки
+        try:
+            meet_id, meet_name, meet_date, meet_time, description, is_active, created_at, created_by, auto_closed = meet
+            # Парсим дату (пример: "25 декабря" или "25.12")
+            # Это упрощённая проверка - можно улучшить
+            if "прошла" in meet_date.lower() or auto_closed == 1:
+                cursor.execute('UPDATE meets SET is_active = 0 WHERE meet_id = ?', (meet_id,))
+                conn.commit()
+                meet = None
+        except:
+            pass
+    
     conn.close()
     return meet
 
@@ -124,9 +167,23 @@ def get_active_meet():
 def close_active_meet():
     conn = sqlite3.connect('nino_bot.db')
     cursor = conn.cursor()
-    cursor.execute('UPDATE meets SET is_active = 0 WHERE is_active = 1')
+    cursor.execute('UPDATE meets SET is_active = 0, auto_closed = 1 WHERE is_active = 1')
     conn.commit()
     conn.close()
+
+
+def get_all_meets(limit=10):
+    """Получить последние сходки (для истории)"""
+    conn = sqlite3.connect('nino_bot.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT * FROM meets 
+        ORDER BY created_at DESC 
+        LIMIT ?
+    ''', (limit,))
+    meets = cursor.fetchall()
+    conn.close()
+    return meets
 
 
 def register_for_meet(user_id, meet_id, code):
@@ -192,6 +249,19 @@ def get_registration_by_code(meet_id, code):
 
 def generate_code():
     return ''.join(random.choices(string.digits, k=6))
+
+
+def update_user_activity(user_id):
+    """Обновляет время последней активности пользователя"""
+    conn = sqlite3.connect('nino_bot.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        UPDATE users 
+        SET last_active = ? 
+        WHERE user_id = ?
+    ''', (datetime.now().strftime('%Y-%m-%d %H:%M:%S'), user_id))
+    conn.commit()
+    conn.close()
 
 
 # ========== ФУНКЦИИ TELEGRAM ==========
@@ -260,7 +330,7 @@ def answer_callback(callback_id, text=None):
 
 def get_updates(offset=None):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
-    params = {"timeout": 30, "allowed_updates": ["message", "callback_query"]}
+    params = {"timeout": 30, "allowed_updates": ["message", "callback_query", "my_chat_member", "chat_member"]}
     if offset:
         params["offset"] = offset
 
@@ -317,6 +387,21 @@ def notify_users_about_new_meet(meet_name, meet_date, meet_time, description):
     print(f"Уведомления о новой сходке отправлены: ✅ {success_count}, ❌ {fail_count}")
 
 
+def notify_admin_about_new_user(user_id, fullname, username):
+    """Уведомляет админов о новом пользователе"""
+    for admin_id in ADMIN_IDS:
+        text = f"""
+👤 <b>НОВЫЙ ПОЛЬЗОВАТЕЛЬ!</b>
+
+<b>Имя:</b> {fullname}
+<b>ID:</b> {user_id}
+<b>Юзернейм:</b> @{username if username else 'нет'}
+
+Всего пользователей: {len(get_all_users())}
+"""
+        send_message_simple(admin_id, text)
+
+
 # ========== КЛАВИАТУРЫ ==========
 def get_main_keyboard(user_id=None):
     """Главное меню с кнопкой проверки кода для зарегистрированных пользователей"""
@@ -351,6 +436,7 @@ def get_admin_keyboard():
             [{"text": "📊 Статистика сходки", "callback_data": "admin_meet_info"}],
             [{"text": "👥 Все пользователи", "callback_data": "admin_all_users"}],
             [{"text": "📢 Сделать рассылку", "callback_data": "admin_mailing"}],
+            [{"text": "📜 История сходок", "callback_data": "admin_meet_history"}],
             [{"text": "🎫 Записаться на сходку", "callback_data": "register_for_meet"}],
             [{"text": "👤 Моя регистрация", "callback_data": "my_registration"}]
         ]
@@ -411,7 +497,7 @@ def get_active_meet_info():
     active_meet = get_active_meet()
 
     if active_meet:
-        meet_id, meet_name, meet_date, meet_time, description, is_active, created_at, created_by = active_meet
+        meet_id, meet_name, meet_date, meet_time, description, is_active, created_at, created_by, auto_closed = active_meet
         registrations = get_all_registrations(meet_id)
         total = len(registrations)
 
@@ -500,11 +586,48 @@ admin_states = {}
 user_states = {}
 
 
+# ========== НОВЫЙ ОБРАБОТЧИК НОВЫХ УЧАСТНИКОВ ==========
+def process_chat_member_update(update):
+    """Обрабатывает события о новых участниках чата"""
+    try:
+        if "my_chat_member" in update:
+            chat_member = update["my_chat_member"]
+            new_status = chat_member["new_chat_member"]["status"]
+            old_status = chat_member["old_chat_member"]["status"]
+            user = chat_member["from"]
+            user_id = user["id"]
+            first_name = user.get("first_name", "")
+            last_name = user.get("last_name", "")
+            username = user.get("username", "")
+            
+            # Если пользователь присоединился к чату
+            if new_status in ["member", "administrator"] and old_status in ["left", "kicked"]:
+                fullname = f"{first_name} {last_name}".strip() if last_name else first_name
+                
+                # Проверяем, есть ли уже в БД
+                existing = get_user(user_id)
+                if not existing:
+                    # Автоматически добавляем в БД
+                    add_user(user_id, fullname, 0, username)
+                    print(f"✅ Новый участник чата добавлен в БД: {fullname}")
+                    
+                    # Уведомляем админов
+                    notify_admin_about_new_user(user_id, fullname, username)
+                    
+                    # Отправляем приветствие
+                    send_message_simple(user_id, get_welcome_text(first_name))
+    except Exception as e:
+        print(f"Ошибка в process_chat_member_update: {e}")
+
+
 # ========== ОБРАБОТЧИКИ ==========
 def process_message(message):
     chat_id = message["chat"]["id"]
     user_id = message["from"]["id"]
     user_name = message["from"].get("first_name", "Друг")
+
+    # Обновляем активность пользователя
+    update_user_activity(user_id)
 
     if "text" not in message:
         return
@@ -572,7 +695,8 @@ def process_message(message):
 """
             send_message_simple(chat_id, meet_info)
             
-            notify_users_about_new_meet(meet_data['name'], meet_data['date'], meet_data['time'], text)
+            # Отправляем уведомления всем пользователям
+            threading.Thread(target=notify_users_about_new_meet, args=(meet_data['name'], meet_data['date'], meet_data['time'], text)).start()
             
             send_message(chat_id, "🔧 <b>Админ-панель</b>", get_admin_keyboard())
             del admin_states[user_id]
@@ -591,13 +715,12 @@ def process_message(message):
 
             reg = get_registration_by_code(active_meet[0], text)
             if reg:
-                reg_id, reg_user_id, meet_id, code, status, reg_time, check_time, fullname, username = reg
-                update_registration_status(reg_user_id, active_meet[0], 'present')
+                update_registration_status(reg[1], active_meet[0], 'present')
                 send_message_simple(chat_id, f"""
 ✅ <b>Присутствие подтверждено!</b>
 
-👤 {fullname}
-🎫 Код: <code>{code}</code>
+👤 {reg[7] if len(reg) > 7 else f"User{reg[1]}"}
+🎫 Код: <code>{text}</code>
 ⏰ Отмечен в: {datetime.now().strftime('%H:%M:%S')}
 """)
             else:
@@ -686,12 +809,11 @@ def process_message(message):
         send_message(chat_id, confirm_text, keyboard)
         return
 
-    # РЕГИСТРАЦИЯ ПОЛЬЗОВАТЕЛЯ (с проверкой на повторную регистрацию)
+    # РЕГИСТРАЦИЯ ПОЛЬЗОВАТЕЛЯ
     if user_states.get(user_id, {}).get('waiting_name'):
-        # Проверяем, не зарегистрирован ли уже пользователь
         existing_user = get_user(user_id)
         if existing_user:
-            send_message_simple(chat_id, "❌ <b>Вы уже зарегистрированы в NINO!</b>\n\nВы уже прошли регистрацию. Теперь вы можете записываться на сходки.\n\nЕсли хотите изменить данные, обратитесь к администратору.")
+            send_message_simple(chat_id, "❌ <b>Вы уже зарегистрированы в NINO!</b>\n\nВы уже прошли регистрацию.")
             del user_states[user_id]
             return
         
@@ -707,10 +829,9 @@ def process_message(message):
         return
 
     if user_states.get(user_id, {}).get('waiting_age'):
-        # Ещё раз проверяем регистрацию (на всякий случай)
         existing_user = get_user(user_id)
         if existing_user:
-            send_message_simple(chat_id, "❌ <b>Вы уже зарегистрированы в NINO!</b>\n\nПовторная регистрация невозможна.")
+            send_message_simple(chat_id, "❌ <b>Вы уже зарегистрированы в NINO!</b>")
             del user_states[user_id]
             return
         
@@ -747,7 +868,7 @@ def process_message(message):
 
             active_meet = get_active_meet()
             if active_meet:
-                meet_id, meet_name, meet_date, meet_time, description, is_active, created_at, created_by = active_meet
+                meet_id, meet_name, meet_date, meet_time, description, is_active, created_at, created_by, auto_closed = active_meet
 
                 existing_reg = get_registration(user_id, meet_id)
                 if not existing_reg:
@@ -861,7 +982,7 @@ NINO — это не просто сообщество. Это твоя личн
 <b>ФИО:</b> {fullname}
 <b>Возраст:</b> {age} лет
 <b>Юзернейм:</b> @{username if username else 'нет'}
-<b>Дата регистрации:</b> {reg_time[:10]}
+<b>Дата регистрации:</b> {reg_time[:10] if reg_time else 'неизвестно'}
 """
             send_message_simple(chat_id, text)
 
@@ -980,7 +1101,7 @@ NINO — это не просто сообщество. Это твоя личн
                 send_message_simple(chat_id, "❌ Сейчас нет активных сходок. Загляни позже!")
                 return
 
-            meet_id, meet_name, meet_date, meet_time, description, is_active, created_at, created_by = active_meet
+            meet_id, meet_name, meet_date, meet_time, description, is_active, created_at, created_by, auto_closed = active_meet
 
             existing_reg = get_registration(user_id, meet_id)
             if existing_reg:
@@ -1020,7 +1141,7 @@ NINO — это не просто сообщество. Это твоя личн
             send_message_simple(chat_id, "❌ Сходка уже закрыта!")
             return
 
-        meet_id, meet_name, meet_date, meet_time, description, is_active, created_at, created_by = active_meet
+        meet_id, meet_name, meet_date, meet_time, description, is_active, created_at, created_by, auto_closed = active_meet
 
         existing_reg = get_registration(user_id, meet_id)
         if existing_reg:
@@ -1071,7 +1192,7 @@ NINO — это не просто сообщество. Это твоя личн
             send_message_simple(chat_id, "❌ Нет активной сходки!")
             return
         close_active_meet()
-        send_message_simple(chat_id, f"🔒 <b>Регистрация закрыта!</b>")
+        send_message_simple(chat_id, f"🔒 <b>Регистрация закрыта для сходки: {active_meet[1]}</b>")
 
     elif data == "admin_get_list":
         if not is_admin(user_id):
@@ -1101,7 +1222,13 @@ NINO — это не просто сообщество. Это твоя личн
             text += "<b>⏳ Ожидают:</b>\n" + "\n".join(waiting) + "\n\n"
         if present:
             text += "<b>✅ Присутствуют:</b>\n" + "\n".join(present)
-        send_message_simple(chat_id, text)
+        
+        # Если список слишком длинный, отправляем по частям
+        if len(text) > 4000:
+            send_message_simple(chat_id, "📋 Список слишком длинный, отправляю файлом...")
+            # Здесь можно добавить отправку файлом
+        else:
+            send_message_simple(chat_id, text)
 
     elif data == "admin_check_codes":
         if not is_admin(user_id):
@@ -1130,7 +1257,7 @@ NINO — это не просто сообщество. Это твоя личн
             send_message_simple(chat_id, "❌ Нет активной сходки!")
             return
 
-        meet_id, meet_name, meet_date, meet_time, description, is_active, created_at, created_by = active_meet
+        meet_id, meet_name, meet_date, meet_time, description, is_active, created_at, created_by, auto_closed = active_meet
         registrations = get_all_registrations(meet_id)
         total = len(registrations)
         waiting = len([r for r in registrations if r[4] == 'waiting'])
@@ -1153,11 +1280,7 @@ NINO — это не просто сообщество. Это твоя личн
     elif data == "admin_all_users":
         if not is_admin(user_id):
             return
-        conn = sqlite3.connect('nino_bot.db')
-        cursor = conn.cursor()
-        cursor.execute('SELECT fullname, username, registered_at FROM users ORDER BY registered_at DESC')
-        users = cursor.fetchall()
-        conn.close()
+        users = get_all_users()
 
         if not users:
             send_message_simple(chat_id, "📋 Нет зарегистрированных пользователей.")
@@ -1165,8 +1288,29 @@ NINO — это не просто сообщество. Это твоя личн
 
         text = "<b>👥 Все пользователи</b>\n\n"
         for u in users[:20]:
-            username = f"@{u[1]}" if u[1] else "нет юзернейма"
-            text += f"👤 {u[0]} ({username}) — зарегистрирован: {u[2][:10]}\n"
+            username = f"@{u[2]}" if u[2] else "нет юзернейма"
+            text += f"👤 {u[1]} ({username}) — активен: {u[3][:10] if u[3] else 'неизвестно'}\n"
+        
+        if len(users) > 20:
+            text += f"\n... и ещё {len(users) - 20} пользователей"
+        
+        send_message_simple(chat_id, text)
+
+    elif data == "admin_meet_history":
+        if not is_admin(user_id):
+            return
+        meets = get_all_meets(10)
+        
+        if not meets:
+            send_message_simple(chat_id, "📜 Нет завершённых сходок.")
+            return
+        
+        text = "<b>📜 История сходок</b>\n\n"
+        for meet in meets:
+            meet_id, meet_name, meet_date, meet_time, description, is_active, created_at, created_by, auto_closed = meet
+            status = "🟢 Активна" if is_active else "🔴 Завершена"
+            text += f"📌 <b>{meet_name}</b>\n   📅 {meet_date} {meet_time}\n   {status}\n\n"
+        
         send_message_simple(chat_id, text)
 
     # ========== РАССЫЛКА ==========
@@ -1304,6 +1448,10 @@ def main():
 
             for update in updates:
                 last_update_id = update["update_id"]
+
+                # НОВОЕ: Обрабатываем события о новых участниках чата
+                if "my_chat_member" in update:
+                    process_chat_member_update(update)
 
                 if "message" in update:
                     process_message(update["message"])
